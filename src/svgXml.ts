@@ -32,55 +32,80 @@ interface SvgDocument {
 		version: string;
 	};
 	paths: string[];
+	unit: SvgUnit;
 }
 
-const parseLength = (value: string, baseLength: Decimal) => {
+type SvgUnit = 'em' | 'ex' | 'px' | 'in' | 'cm' | 'mm' | 'pt' | 'pc' | '%';
+
+const convertPx = (
+	length: Decimal,
+	baseLength: Decimal,
+	mode: 'FROM_PX' | 'TO_PX',
+	unit?: SvgUnit,
+) => {
+	let scale: number | Decimal = 1;
+
+	if (unit) {
+		switch (unit) {
+			case 'em':
+				// Taking a guess 1em = 1pc
+				scale = 16;
+				break;
+			case 'ex':
+				// Taking a guess 1ex = 0.5em = 0.5pc
+				scale = 8;
+				break;
+			case 'px':
+				scale = 1;
+				break;
+			case 'in':
+				scale = 96;
+				break;
+			case 'cm':
+				scale = 9600 / 254;
+				break;
+			case 'mm':
+				scale = 960 / 254;
+				break;
+			case 'pt':
+				scale = 96 / 72;
+				break;
+			case 'pc':
+				scale = 16;
+				break;
+			case '%':
+				scale = baseLength.mul(length).div(100);
+				break;
+		}
+	}
+
+	return mode === 'TO_PX' ? length.mul(scale) : length.div(scale);
+};
+
+const parseLength = (value: string) => {
 	const match = value.match(
 		/^\s*([+-]?[0-9]+(?:[Ee][+-]?[0-9]+)?|[+-]?[0-9]*[.][0-9]+(?:[Ee][+-]?[0-9]+)?)(em|ex|px|in|cm|mm|pt|pc|%)?\s*$/,
 	);
 	if (match) {
-		const length = new Decimal(match[1]);
-		const unit = match[2];
-		let scale: number | Decimal = 1;
+		return {
+			length: new Decimal(match[1]),
+			unit: match[2] as SvgUnit,
+		};
+	}
+};
 
-		if (unit) {
-			switch (unit) {
-				case 'em':
-					// Taking a guess 1em = 1pc
-					scale = 16;
-					break;
-				case 'ex':
-					// Taking a guess 1ex = 0.5em = 0.5pc
-					scale = 8;
-					break;
-				case 'px':
-					scale = 1;
-					break;
-				case 'in':
-					scale = 96;
-					break;
-				case 'cm':
-					scale = 9600 / 254;
-					break;
-				case 'mm':
-					scale = 960 / 254;
-					break;
-				case 'pt':
-					scale = 96 / 72;
-					break;
-				case 'pc':
-					scale = 16;
-					break;
-				case '%':
-					scale = baseLength.mul(length).div(100);
-					break;
-			}
-		}
+const parseLengthAndScale = (value: string, baseLength: Decimal) => {
+	const parsed = parseLength(value);
+	if (parsed) {
+		const scaledLength = convertPx(
+			parsed.length,
+			baseLength,
+			'TO_PX',
+			parsed.unit,
+		);
 
-		const result = length.mul(scale);
-
-		if (result.isFinite()) {
-			return result;
+		if (scaledLength.isFinite()) {
+			return scaledLength;
 		}
 	}
 };
@@ -116,6 +141,7 @@ const extractSvgDocumentPaths = async (
 							version: '1.1',
 						},
 						paths: [],
+						unit: 'px',
 					};
 					documents.push(document);
 
@@ -130,33 +156,47 @@ const extractSvgDocumentPaths = async (
 							)
 						) {
 							switch (attr['local']) {
-								case 'width':
-									document.properties.width =
-										parseLength(
-											attr['value'],
+								case 'width': {
+									const parsed = parseLength(attr['value']);
+									if (parsed) {
+										document.properties.width = convertPx(
+											parsed.length,
 											document.properties.width,
-										) || document.properties.width;
+											'TO_PX',
+											parsed.unit,
+										);
+										document.unit = parsed.unit;
+									}
 									break;
-								case 'height':
-									document.properties.height =
-										parseLength(
-											attr['value'],
+								}
+								case 'height': {
+									const parsed = parseLength(attr['value']);
+									if (parsed) {
+										document.properties.height = convertPx(
+											parsed.length,
 											document.properties.height,
-										) || document.properties.height;
+											'TO_PX',
+											parsed.unit,
+										);
+										document.unit = parsed.unit;
+									}
 									break;
+								}
 								case 'viewBox':
 									{
-										const viewBox = String(
+										const viewBox = /*String(
 											attr['value'],
 										).match(
 											/^([+-]?[0-9]+(?:[Ee][+-]?[0-9]+)?|[+-]?[0-9]*\.[0-9]+(?:[Ee][+-]?[0-9]+))(?:\s+|\s*,\s*)([+-]?[0-9]+(?:[Ee][+-]?[0-9]+)?|[+-]?[0-9]*\.[0-9]+(?:[Ee][+-]?[0-9]+))(?:\s+|\s*,\s*)([+]?[0-9]+(?:[Ee][+-]?[0-9]+)?|[+-]?[0-9]*\.[0-9]+(?:[Ee][+-]?[0-9]+))(?:\s+|\s*,\s*)([+]?[0-9]+(?:[Ee][+-]?[0-9]+)?|[+-]?[0-9]*\.[0-9]+(?:[Ee][+-]?[0-9]+))$/,
-										);
+										);*/ (attr[
+											'value'
+										] as string).split(' ');
 										if (viewBox) {
 											document.properties.viewBox = {
-												minX: new Decimal(viewBox[1]),
-												minY: new Decimal(viewBox[2]),
-												width: new Decimal(viewBox[3]),
-												height: new Decimal(viewBox[4]),
+												minX: new Decimal(viewBox[0]),
+												minY: new Decimal(viewBox[1]),
+												width: new Decimal(viewBox[2]),
+												height: new Decimal(viewBox[3]),
 											};
 										}
 									}
@@ -204,21 +244,21 @@ const extractSvgDocumentPaths = async (
 										switch (attr['local']) {
 											case 'cx':
 												cx =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthX,
 													) || cx;
 												break;
 											case 'cy':
 												cy =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthY,
 													) || cy;
 												break;
 											case 'r':
 												r =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLength,
 													) || r;
@@ -260,14 +300,14 @@ const extractSvgDocumentPaths = async (
 										switch (attr['local']) {
 											case 'cx':
 												cx =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthX,
 													) || cx;
 												break;
 											case 'cy':
 												cy =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthY,
 													) || cy;
@@ -275,7 +315,7 @@ const extractSvgDocumentPaths = async (
 											case 'rx':
 												if (attr['value'] !== 'auto') {
 													rx =
-														parseLength(
+														parseLengthAndScale(
 															attr['value'],
 															baseLengthX,
 														) || rx;
@@ -284,7 +324,7 @@ const extractSvgDocumentPaths = async (
 											case 'ry':
 												if (attr['value'] !== 'auto') {
 													ry =
-														parseLength(
+														parseLengthAndScale(
 															attr['value'],
 															baseLengthY,
 														) || ry;
@@ -338,28 +378,28 @@ const extractSvgDocumentPaths = async (
 										switch (attr['local']) {
 											case 'x1':
 												x1 =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthX,
 													) || x1;
 												break;
 											case 'x2':
 												x2 =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthX,
 													) || x2;
 												break;
 											case 'y1':
 												y1 =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthY,
 													) || y1;
 												break;
 											case 'y2':
 												y2 =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthY,
 													) || y2;
@@ -463,14 +503,14 @@ const extractSvgDocumentPaths = async (
 										switch (attr['local']) {
 											case 'x':
 												x =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthX,
 													) || x;
 												break;
 											case 'y':
 												y =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthY,
 													) || y;
@@ -478,7 +518,7 @@ const extractSvgDocumentPaths = async (
 											case 'rx':
 												if (attr['value'] !== 'auto') {
 													rx =
-														parseLength(
+														parseLengthAndScale(
 															attr['value'],
 															baseLengthX,
 														) || rx;
@@ -487,7 +527,7 @@ const extractSvgDocumentPaths = async (
 											case 'ry':
 												if (attr['value'] !== 'auto') {
 													ry =
-														parseLength(
+														parseLengthAndScale(
 															attr['value'],
 															baseLengthY,
 														) || ry;
@@ -495,14 +535,14 @@ const extractSvgDocumentPaths = async (
 												break;
 											case 'width':
 												width =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthX,
 													) || width;
 												break;
 											case 'height':
 												height =
-													parseLength(
+													parseLengthAndScale(
 														attr['value'],
 														baseLengthY,
 													) || height;
@@ -609,9 +649,23 @@ const extractSvgDocumentPaths = async (
 
 const reconstructSvgDocuments = (documents: SvgDocument[]): string[] => {
 	return documents.map((document) => {
-		return `<svg width="${document.properties.width}" height="${
-			document.properties.height
-		}" version="${document.properties.version}" ${
+		const scaledWidth = convertPx(
+			document.properties.width,
+			document.properties.width,
+			'FROM_PX',
+			document.unit,
+		);
+		const scaledHeight = convertPx(
+			document.properties.height,
+			document.properties.height,
+			'FROM_PX',
+			document.unit,
+		);
+		return `<svg width="${scaledWidth}${
+			document.unit
+		}" height="${scaledHeight}${document.unit}" version="${
+			document.properties.version
+		}" ${
 			document.properties.viewBox
 				? `viewBox="${document.properties.viewBox.minX} ${document.properties.viewBox.minY} ${document.properties.viewBox.width} ${document.properties.viewBox.height}"`
 				: ''
